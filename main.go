@@ -11,19 +11,21 @@ import (
 )
 
 const (
-	vaultDir          = ".vault"
-	vaultFile         = "vault.json.aes"
-	saltSize          = 32
-	nonceSize         = 12
-	argonTime         = 4
-	argonMemory       = 64 * 1024
-	argonThreads      = 2
-	argonKeyLen       = 32
-	scryptN           = 1 << 18
-	scryptR           = 8
-	scryptP           = 1
-	MasterPasswordLen = 4
-	clipboardDelay    = 30 * time.Second
+	vaultDir           = ".vault"
+	vaultFile          = "vault.json.aes"
+	saltSize           = 32
+	nonceSize          = 12
+	argonTime          = 4
+	argonMemory        = 64 * 1024
+	argonThreads       = 2
+	argonKeyLen        = 32
+	scryptN            = 1 << 18
+	scryptR            = 8
+	scryptP            = 1
+	MasterPasswordLen  = 12
+	clipboardDelay     = 30 * time.Second
+	recoveryQuestionsN = 3
+	recoverySaltSize   = 32
 )
 
 func main() {
@@ -81,15 +83,17 @@ func initVault() {
 	recoveryAnswers := askRecoveryQuestions()
 
 	salt := generateSalt()
+	nonce := generateNonce()
 	key := deriveKeyArgon2(masterPass, salt)
 	vault := Vault{Entries: []Entry{}}
-	encrypted := encryptVault(vault, key, generateNonce())
+	encrypted := encryptVault(vault, key, nonce)
 
 	err := os.MkdirAll(filepath.Dir(vaultFilePath), 0700)
 	if err != nil {
 		panic(err)
 	}
-	data := append(salt, encrypted...)
+	data := append(salt, nonce...)
+	data = append(data, encrypted...)
 	err = os.WriteFile(vaultFilePath, data, 0600)
 	if err != nil {
 		panic(err)
@@ -116,9 +120,8 @@ func loadVault() (Vault, []byte, []byte) {
 	}
 
 	salt := data[:saltSize]
-	ciphertext := data[saltSize:]
-	nonce := ciphertext[:nonceSize]
-	encryptedData := ciphertext[nonceSize:]
+	nonce := data[saltSize : saltSize+nonceSize]
+	encryptedData := data[saltSize+nonceSize:]
 
 	masterPass := readMasterPassword("Master password: ")
 	key := deriveKeyArgon2(masterPass, salt)
@@ -129,7 +132,7 @@ func loadVault() (Vault, []byte, []byte) {
 		key = deriveKeyScrypt(masterPass, salt)
 		plaintext, err = decrypt(encryptedData, key, nonce)
 		if err != nil {
-			fmt.Println("Incorrect password or corrupted vault.")
+			fmt.Println("Incorrect password or corrupted vault.", err)
 			os.Exit(1)
 		}
 	}
@@ -141,10 +144,15 @@ func loadVault() (Vault, []byte, []byte) {
 
 func saveVault(vault Vault, key, nonce []byte) {
 	encrypted := encryptVault(vault, key, nonce)
-	data, _ := os.ReadFile(vaultFile)
-	salt := data[:saltSize]
-	fullData := append(salt, append(nonce, encrypted...)...)
-	os.WriteFile(vaultFile, fullData, 0600)
+	salt := make([]byte, saltSize)
+	// We need to read the salt from the existing vault file to re-encrypt
+	data, err := os.ReadFile(getVaultFilePath())
+	if err == nil {
+		copy(salt, data[:saltSize])
+	}
+	fullData := append(salt, nonce...)
+	fullData = append(fullData, encrypted...)
+	os.WriteFile(getVaultFilePath(), fullData, 0600)
 }
 
 func addEntry() {

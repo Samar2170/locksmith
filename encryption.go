@@ -27,9 +27,18 @@ func deriveKeyArgon2(pass string, salt []byte) []byte {
 }
 
 func encryptVault(vault Vault, key, nonce []byte) []byte {
-	data, _ := json.MarshalIndent(vault, "", "  ")
-	block, _ := aes.NewCipher(key)
-	aesgcm, _ := cipher.NewGCM(block)
+	data, err := json.MarshalIndent(vault, "", "  ")
+	if err != nil {
+		panic(err)
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		panic(err)
+	}
+	aesgcm, err := cipher.NewGCM(block)
+	if err != nil {
+		panic(err)
+	}
 	return aesgcm.Seal(nil, nonce, data, nil)
 }
 func decrypt(ciphertext, key, nonce []byte) ([]byte, error) {

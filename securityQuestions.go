@@ -1,17 +1,13 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
 
 	"golang.org/x/crypto/argon2"
-)
-
-const (
-	recoveryQuestionsN = 2
-	recoverySaltSize   = 32
 )
 
 type RecoveryAnswer struct {
@@ -25,28 +21,39 @@ type RecoveryData struct {
 }
 
 func askRecoveryQuestions() []RecoveryAnswer {
-	fmt.Printf("Set up %d recovery questions (case-insensitive, trimmed):\n", recoveryQuestionsN)
+
+	fmt.Printf("Set up %d recovery questions (answers are case-insensitive and trimmed):\n\n", recoveryQuestionsN)
+
 	answers := make([]RecoveryAnswer, recoveryQuestionsN)
 
-	for i := range recoveryQuestionsN {
-		var q, a string
-		fmt.Printf("Question %d: ", i+1)
-		fmt.Scanln(&q)
+	scanner := bufio.NewScanner(os.Stdin)
+	for i := 0; i < recoveryQuestionsN; i++ {
+		question := readLine(scanner, fmt.Sprintf("Question %d: ", i+1))
+		for question == "" {
+			fmt.Println("Question cannot be empty.")
+			question = readLine(scanner, fmt.Sprintf("Question %d: ", i+1))
+		}
 
-		var dummy string
-		fmt.Scanln(&dummy)
+		answer := readLine(scanner, "Answer: ")
+		for answer == "" {
+			fmt.Println("Answer cannot be empty.")
+			answer = readLine(scanner, "Answer: ")
+		}
 
-		fmt.Print("Answer: ")
-		fmt.Scanln(&a)
-		a = strings.TrimSpace(strings.ToLower(a))
+		// Normalize and hash the answer
+		normalizedAnswer := strings.ToLower(answer)
 		salt := generateSalt()
-		hash := argon2.IDKey([]byte(a), salt, argonTime, argonMemory, argonThreads, argonKeyLen)
+		hash := argon2.IDKey([]byte(normalizedAnswer), salt, argonTime, argonMemory, argonThreads, argonKeyLen)
+
 		answers[i] = RecoveryAnswer{
-			Question: q,
+			Question: question,
 			Salt:     salt,
 			Hash:     hash,
 		}
+
+		fmt.Println("Saved.\n")
 	}
+
 	return answers
 }
 
