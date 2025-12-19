@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"crypto/aes"
 	"encoding/json"
 	"fmt"
@@ -8,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"golang.org/x/crypto/argon2"
 )
 
 const (
@@ -56,6 +59,8 @@ func main() {
 		deleteEntry(os.Args[2])
 	case "change-master":
 		changeMasterPassword()
+	case "recover":
+		recoverVault()
 	default:
 		printHelp()
 
@@ -105,6 +110,66 @@ func initVault() {
 	}
 
 	fmt.Println("Vault initialized securely at: ", vaultFile)
+}
+
+func recoverVault() {
+	fmt.Println("Vault recovery initiated.")
+	data, err := os.ReadFile(getVaultFilePath() + ".recovery")
+	if err != nil {
+		fmt.Println("Failed to read recovery data file:", err)
+		os.Exit(1)
+	}
+
+	var recoveryData RecoveryData
+	err = json.Unmarshal(data, &recoveryData)
+	if err != nil {
+		fmt.Println("Corrupted recovery data file:", err)
+		os.Exit(1)
+	}
+
+	scanner := bufio.NewScanner(os.Stdin)
+	correctAnswers := 0
+
+	for _, qa := range recoveryData.Answers {
+		fmt.Println(qa.Question)
+		answer := readLine(scanner, "Answer: ")
+		normalizedAnswer := strings.ToLower(answer)
+		hash := argon2.IDKey([]byte(normalizedAnswer), qa.Salt, argonTime, argonMemory, argonThreads, argonKeyLen)
+
+		if compareHashes(hash, qa.Hash) {
+			correctAnswers++
+		} else {
+			fmt.Println("Incorrect answer.")
+		}
+	}
+
+	if correctAnswers < recoveryQuestionsN {
+		fmt.Println("Recovery failed. Not enough correct answers.")
+		os.Exit(1)
+	}
+
+	newMasterPass := readMasterPassword("Set new master password: ")
+	confirm := readMasterPassword("Confirm new master password: ")
+
+	if newMasterPass != confirm {
+		fmt.Println("Passwords do not match.")
+		return
+	}
+
+	vault, _, _ := loadVault()
+	salt := generateSalt()
+	nonce := generateNonce()
+	key := deriveKeyArgon2(newMasterPass, salt)
+	encrypted := encryptVault(vault, key, nonce)
+
+	fullData := append(salt, nonce...)
+	fullData = append(fullData, encrypted...)
+	err = os.WriteFile(getVaultFilePath(), fullData, 0600)
+	if err != nil {
+		panic(err)
+	}
+
+	fmt.Println("Vault recovered and master password reset.")
 }
 
 func loadVault() (Vault, []byte, []byte) {

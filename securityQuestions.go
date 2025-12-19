@@ -61,3 +61,14 @@ func appendRecoveryData(path string, data RecoveryData) error {
 	b, _ := json.MarshalIndent(data, "", "  ")
 	return os.WriteFile(path+".recovery", b, 0600)
 }
+
+func compareHashes(a, b []byte) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	result := byte(0)
+	for i := 0; i < len(a); i++ {
+		result |= a[i] ^ b[i]
+	}
+	return result == 0
+}
