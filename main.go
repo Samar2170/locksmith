@@ -85,7 +85,7 @@ func initVault() {
 	}
 
 	fmt.Println("Recovery Setup ... ")
-	recoveryAnswers := askRecoveryQuestions()
+	recoveryAnswers, rawAnswers := askRecoveryQuestions()
 
 	salt := generateSalt()
 	nonce := generateNonce()
@@ -104,7 +104,17 @@ func initVault() {
 		panic(err)
 	}
 
-	err = appendRecoveryData(vaultFilePath, RecoveryData{Answers: recoveryAnswers})
+	recoveryKeySalt := generateSalt()
+	recoveryKey := deriveKeyArgon2(strings.Join(rawAnswers, ""), recoveryKeySalt)
+	recoveryNonce := generateNonce()
+	encryptedMasterKey := encrypt(key, recoveryKey, recoveryNonce)
+
+	err = appendRecoveryData(vaultFilePath, RecoveryData{
+		Answers:           recoveryAnswers,
+		EncryptedVaultKey: encryptedMasterKey,
+		KeyNonce:          recoveryNonce,
+		RecoveryKeySalt:   recoveryKeySalt,
+	})
 	if err != nil {
 		panic(err)
 	}
@@ -114,7 +124,8 @@ func initVault() {
 
 func recoverVault() {
 	fmt.Println("Vault recovery initiated.")
-	data, err := os.ReadFile(getVaultFilePath() + ".recovery")
+	vaultFilePath := getVaultFilePath()
+	data, err := os.ReadFile(vaultFilePath + ".recovery")
 	if err != nil {
 		fmt.Println("Failed to read recovery data file:", err)
 		os.Exit(1)
@@ -128,9 +139,10 @@ func recoverVault() {
 	}
 
 	scanner := bufio.NewScanner(os.Stdin)
+	rawAnswers := make([]string, len(recoveryData.Answers))
 	correctAnswers := 0
 
-	for _, qa := range recoveryData.Answers {
+	for i, qa := range recoveryData.Answers {
 		fmt.Println(qa.Question)
 		answer := readLine(scanner, "Answer: ")
 		normalizedAnswer := strings.ToLower(answer)
@@ -138,6 +150,7 @@ func recoverVault() {
 
 		if compareHashes(hash, qa.Hash) {
 			correctAnswers++
+			rawAnswers[i] = answer
 		} else {
 			fmt.Println("Incorrect answer.")
 		}
@@ -148,6 +161,32 @@ func recoverVault() {
 		os.Exit(1)
 	}
 
+	recoveryKey := deriveKeyArgon2(strings.Join(rawAnswers, ""), recoveryData.RecoveryKeySalt)
+	masterKey, err := decrypt(recoveryData.EncryptedVaultKey, recoveryKey, recoveryData.KeyNonce)
+	if err != nil {
+		fmt.Println("Failed to decrypt master key:", err)
+		os.Exit(1)
+	}
+
+	vaultData, err := os.ReadFile(vaultFilePath)
+	if err != nil {
+		fmt.Println("Failed to read vault file:", err)
+		os.Exit(1)
+	}
+	salt := vaultData[:saltSize]
+	nonce := vaultData[saltSize : saltSize+nonceSize]
+	encryptedVault := vaultData[saltSize+nonceSize:]
+
+	decryptedVault, err := decrypt(encryptedVault, masterKey, nonce)
+	if err != nil {
+		fmt.Println("Failed to decrypt vault:", err)
+		os.Exit(1)
+	}
+
+	var vault Vault
+	json.Unmarshal(decryptedVault, &vault)
+
+	fmt.Println("Vault successfully decrypted.")
 	newMasterPass := readMasterPassword("Set new master password: ")
 	confirm := readMasterPassword("Confirm new master password: ")
 
@@ -156,20 +195,32 @@ func recoverVault() {
 		return
 	}
 
-	vault, _, _ := loadVault()
-	salt := generateSalt()
-	nonce := generateNonce()
-	key := deriveKeyArgon2(newMasterPass, salt)
-	encrypted := encryptVault(vault, key, nonce)
+	newMasterKey := deriveKeyArgon2(newMasterPass, salt)
+	newNonce := generateNonce()
+	newEncryptedVault := encryptVault(vault, newMasterKey, newNonce)
 
-	fullData := append(salt, nonce...)
-	fullData = append(fullData, encrypted...)
-	err = os.WriteFile(getVaultFilePath(), fullData, 0600)
+	fullData := append(salt, newNonce...)
+	fullData = append(fullData, newEncryptedVault...)
+	os.WriteFile(vaultFilePath, fullData, 0600)
+
+	fmt.Println("Recovery Setup ... ")
+	newRecoveryAnswers, newRawAnswers := askRecoveryQuestions()
+	newRecoveryKeySalt := generateSalt()
+	newRecoveryKey := deriveKeyArgon2(strings.Join(newRawAnswers, ""), newRecoveryKeySalt)
+	newRecoveryNonce := generateNonce()
+	newEncryptedMasterKey := encrypt(newMasterKey, newRecoveryKey, newRecoveryNonce)
+
+	err = appendRecoveryData(vaultFilePath, RecoveryData{
+		Answers:           newRecoveryAnswers,
+		EncryptedVaultKey: newEncryptedMasterKey,
+		KeyNonce:          newRecoveryNonce,
+		RecoveryKeySalt:   newRecoveryKeySalt,
+	})
 	if err != nil {
 		panic(err)
 	}
 
-	fmt.Println("Vault recovered and master password reset.")
+	fmt.Println("Vault recovered and re-encrypted successfully.")
 }
 
 func loadVault() (Vault, []byte, []byte) {
