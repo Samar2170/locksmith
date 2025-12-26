@@ -17,14 +17,18 @@ type RecoveryAnswer struct {
 }
 
 type RecoveryData struct {
-	Answers []RecoveryAnswer `json:"answers"`
+	Answers           []RecoveryAnswer `json:"answers"`
+	EncryptedVaultKey []byte           `json:"encrypted_vault_key"`
+	KeyNonce          []byte           `json:"key_nonce"`
+	RecoveryKeySalt   []byte           `json:"recovery_key_salt"`
 }
 
-func askRecoveryQuestions() []RecoveryAnswer {
+func askRecoveryQuestions() ([]RecoveryAnswer, []string) {
 
 	fmt.Printf("Set up %d recovery questions (answers are case-insensitive and trimmed):\n\n", recoveryQuestionsN)
 
 	answers := make([]RecoveryAnswer, recoveryQuestionsN)
+	rawAnswers := make([]string, recoveryQuestionsN)
 
 	scanner := bufio.NewScanner(os.Stdin)
 	for i := 0; i < recoveryQuestionsN; i++ {
@@ -50,14 +54,27 @@ func askRecoveryQuestions() []RecoveryAnswer {
 			Salt:     salt,
 			Hash:     hash,
 		}
+		rawAnswers[i] = answer
 
 		fmt.Println("Saved.\n")
 	}
 
-	return answers
+	return answers, rawAnswers
+
 }
 
 func appendRecoveryData(path string, data RecoveryData) error {
 	b, _ := json.MarshalIndent(data, "", "  ")
 	return os.WriteFile(path+".recovery", b, 0600)
+}
+
+func compareHashes(a, b []byte) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	result := byte(0)
+	for i := 0; i < len(a); i++ {
+		result |= a[i] ^ b[i]
+	}
+	return result == 0
 }
